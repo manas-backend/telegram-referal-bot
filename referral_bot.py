@@ -2,7 +2,8 @@
 """
 Telegram Referal Bot - Render uchun optimallashtirilgan
 """
-
+from flask import Flask
+from threading import Thread
 import logging
 import os
 import sqlite3
@@ -16,7 +17,12 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Render URL: https://your-app.onrender.com
 PORT = int(os.getenv("PORT", 8080))
+app = Flask(__name__)
 
+@app.route('/')
+def home():
+    return "Bot ishlayapti!"
+    
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -342,6 +348,10 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
 
     print("✅ Bot polling rejimida ishga tushdi!")
+    def run_flask():
+    app.run(host="0.0.0.0", port=PORT)
+
+    Thread(target=run_flask).start()
 
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
