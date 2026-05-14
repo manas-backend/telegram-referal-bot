@@ -42,6 +42,8 @@ DB_PATH = "referral_bot.db"
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    
+    # Foydalanuvchilar jadvali
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
         username TEXT,
@@ -49,24 +51,24 @@ def init_db():
         referred_by INTEGER,
         referral_count INTEGER DEFAULT 0,
         join_date TEXT,
-        is_active INTEGER DEFAULT 1
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS referrals (
-       user_id INTEGER PRIMARY KEY,
-        username TEXT,
-        first_name TEXT,
-        referred_by INTEGER,
-        referral_count INTEGER DEFAULT 0,
-        join_date TEXT,
         is_active INTEGER DEFAULT 1,
-        is_subscribed INTEGER DEFAULT 0  -- Yangi field
+        is_subscribed INTEGER DEFAULT 0
     )''')
-    # Mavjud bazaga yangi ustunni qo'shib qo'yish (xatolik bermasligi uchun try-except ichida)
+    
+    # Agar is_subscribed ustuni bo'lmasa, qo'shish
     try:
         c.execute("ALTER TABLE users ADD COLUMN is_subscribed INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
-        pass # Ustun allaqachon mavjud bo'lsa
-        
+        pass
+
+    # Referallar bog'lanish jadvali (TO'G'RILANGAN)
+    c.execute('''CREATE TABLE IF NOT EXISTS referrals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        referrer_id INTEGER,
+        referred_id INTEGER,
+        date TEXT
+    )''')
+    
     conn.commit()
     conn.close()
 
@@ -410,16 +412,26 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ Hali obuna bo‘lmagansiz!", show_alert=True)
             return
 
-        # DB ga yozib qo'yamiz
+        # Foydalanuvchi bazada bo'lmasa, qo'shib qo'yamiz
+        add_user(
+            user_id,
+            query.from_user.username or "",
+            query.from_user.first_name or "User"
+        )
+
+        # Endi bemalol statusni yangilasa bo'ladi
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("UPDATE users SET is_subscribed = 1 WHERE user_id = ?", (user_id,))
+        c.execute(
+            "UPDATE users SET is_subscribed = 1 WHERE user_id = ?",
+            (user_id,)
+        )
         conn.commit()
         conn.close()
 
         await query.answer("✅ Obuna tasdiqlandi!")
         await back_to_menu_callback(update, context)
-        
+
     elif data == 'admin_broadcast':
         await query.answer("Bu funksiya keyingi versiyada qo'shiladi", show_alert=True)
     elif data == 'admin_detailed_stats':
