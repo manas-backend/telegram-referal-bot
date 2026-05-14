@@ -1,2 +1,7 @@
 python-telegram-bot==21.0
 python-dotenv==1.0.1
+logging
+os
+sqlite3
+datetime
+load_dotenv
