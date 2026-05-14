@@ -120,6 +120,16 @@ def get_total_stats():
     return total_users, referred_users, active_referrers
 
 # ─────────────────────────── HANDLERS ───────────────────────────
+async def check_subscription(user_id, context):
+    chat_id = "@super_olimpiada"  # kanal username
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status in ["member", "administrator", "creator"]:
+            return True
+    except:
+        return False
+    return False
+    
 async def join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.chat_join_request.from_user
     chat_id = update.chat_join_request.chat.id
@@ -161,6 +171,20 @@ def make_main_keyboard(user_id):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
+
+    is_joined = await check_subscription(user_id, context)
+    if not is_joined:
+        keyboard = [
+            [InlineKeyboardButton("📢 Kanalga obuna bo'lish", url="https://t.me/super_olimpiada")],
+            [InlineKeyboardButton("✅ Tekshirish", callback_data="back_to_menu")]
+        ]
+        await update.message.reply_text(
+            "❌ Botdan foydalanish uchun avval kanalga obuna bo'ling!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return  # Obuna bo'lmagan bo'lsa, pastdagi kodlar ishlamaydi
+
+    
     username = user.username or ""
     first_name = user.first_name or "Foydalanuvchi"
 
@@ -337,7 +361,9 @@ async def back_to_menu_callback(update: Update, context: ContextTypes.DEFAULT_TY
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
+    user_id = query.from_user.id # user_id ni teparoqda olib qo'yamiz
 
+    
     if data == 'my_stats':
         await my_stats_callback(update, context)
     elif data == 'top_rating':
@@ -348,6 +374,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_panel_callback(update, context)
     elif data == 'back_to_menu':
         await back_to_menu_callback(update, context)
+    elif data == "check_sub":
+        is_joined = await check_subscription(user_id, context)
+
+        if not is_joined:
+            await query.answer("❌ Hali obuna bo‘lmagansiz!", show_alert=True)
+            return
+
+        await query.answer("✅ Obuna tasdiqlandi!")
+        await back_to_menu_callback(update, context)
+        
     elif data == 'admin_broadcast':
         await query.answer("Bu funksiya keyingi versiyada qo'shiladi", show_alert=True)
     elif data == 'admin_detailed_stats':
