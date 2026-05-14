@@ -133,7 +133,7 @@ def get_total_stats():
 
 # ─────────────────────────── HANDLERS ───────────────────────────
 async def check_subscription(user_id, context):
-    chat_id = "@super_olimpiada"  # kanal username
+    chat_id = "https://t.me/englishhshsa"  # kanal username
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
         if member.status in ["member", "administrator", "creator"]:
