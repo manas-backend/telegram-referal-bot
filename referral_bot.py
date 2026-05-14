@@ -32,7 +32,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-GROUP_LINK = "https://t.me/super_olimpiada"
+GROUP_LINK = "https://t.me/englishhshsa"
 
 # Database yo'li - Render da /data papkasi doimiy
 DB_PATH = "referral_bot.db"
