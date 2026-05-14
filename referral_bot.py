@@ -330,7 +330,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_callback))
 
-    def main():
+def main():
     if not TOKEN:
         raise Exception("BOT_TOKEN yo'q!")
 
