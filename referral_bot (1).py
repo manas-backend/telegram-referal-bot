@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Telegram Referal Bot
+Telegram Referal Bot - Render uchun optimallashtirilgan
 """
 
 import logging
@@ -11,12 +11,12 @@ from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# .env fayldan o'qish
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Render URL: https://your-app.onrender.com
+PORT = int(os.getenv("PORT", 8443))
 
-# Logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -25,10 +25,13 @@ logger = logging.getLogger(__name__)
 
 GROUP_LINK = "https://t.me/super_olimpiada"
 
+# Database yo'li - Render da /data papkasi doimiy
+DB_PATH = os.getenv("DB_PATH", "referral_bot.db")
+
 # ─────────────────────────── DATABASE ───────────────────────────
 
 def init_db():
-    conn = sqlite3.connect('referral_bot.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
@@ -49,7 +52,7 @@ def init_db():
     conn.close()
 
 def add_user(user_id, username, first_name, referred_by=None):
-    conn = sqlite3.connect('referral_bot.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
     if c.fetchone():
@@ -68,7 +71,7 @@ def add_user(user_id, username, first_name, referred_by=None):
     return True
 
 def get_user_stats(user_id):
-    conn = sqlite3.connect('referral_bot.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('SELECT referral_count, join_date FROM users WHERE user_id = ?', (user_id,))
     result = c.fetchone()
@@ -86,7 +89,7 @@ def get_user_stats(user_id):
     return None, None, []
 
 def get_top_users(limit=10):
-    conn = sqlite3.connect('referral_bot.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''SELECT user_id, first_name, username, referral_count
                  FROM users WHERE is_active = 1
@@ -96,7 +99,7 @@ def get_top_users(limit=10):
     return top_users
 
 def get_total_stats():
-    conn = sqlite3.connect('referral_bot.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('SELECT COUNT(*) FROM users')
     total_users = c.fetchone()[0]
@@ -204,7 +207,6 @@ async def top_rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     top_users = get_top_users(10)
     medals = ["🥇", "🥈", "🥉"]
-
     message = "<b>🏆 TOP 10 REYTING</b>\n\nEng ko'p odam taklif qilganlar:\n\n"
 
     for i, (uid, name, uname, count) in enumerate(top_users, 1):
@@ -328,8 +330,18 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_callback))
 
-    print("✅ Bot ishga tushdi!")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Render da WEBHOOK_URL bo'lsa webhook, bo'lmasa polling
+    if WEBHOOK_URL:
+        print(f"✅ Bot webhook rejimida ishga tushdi: {WEBHOOK_URL}")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            webhook_url=f"{WEBHOOK_URL}/webhook",
+            url_path="/webhook"
+        )
+    else:
+        print("✅ Bot polling rejimida ishga tushdi!")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
