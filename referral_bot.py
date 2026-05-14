@@ -7,7 +7,13 @@ import sqlite3
 from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    ChatJoinRequestHandler
+)
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -113,6 +119,33 @@ def get_total_stats():
     return total_users, referred_users, active_referrers
 
 # ─────────────────────────── HANDLERS ───────────────────────────
+async def join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.chat_join_request.from_user
+    chat_id = update.chat_join_request.chat.id
+
+    # kanalga avtomatik qo‘shish (approve)
+    await context.bot.approve_chat_join_request(
+        chat_id=chat_id,
+        user_id=user.id
+    )
+
+    # userni bazaga qo‘shish
+    add_user(
+        user.id,
+        user.username or "",
+        user.first_name or "User"
+    )
+
+    # referral bonus (ixtiyoriy)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE users SET referral_count = referral_count + 1 WHERE user_id = ?",
+        (user.id,)
+    )
+    conn.commit()
+    conn.close()
+
 
 def make_main_keyboard(user_id):
     keyboard = [
@@ -339,9 +372,12 @@ def main():
     init_db()
 
     application = Application.builder().token(TOKEN).build()
+    
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_callback))
+    
+    application.add_handler(ChatJoinRequestHandler(join_request))
 
     print("✅ Bot polling rejimida ishga tushdi!")
     def run_flask():
