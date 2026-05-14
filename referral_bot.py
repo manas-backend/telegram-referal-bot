@@ -1,7 +1,4 @@
-# -*- coding: utf-8 -*-
-"""
-Telegram Referal Bot - Render uchun optimallashtirilgan
-"""
+
 from flask import Flask
 from threading import Thread
 import logging
@@ -14,8 +11,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Render URL: https://your-app.onrender.com
+ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS").split(",")))
 PORT = int(os.getenv("PORT", 8080))
 app = Flask(__name__)
 
@@ -124,7 +120,7 @@ def make_main_keyboard(user_id):
         [InlineKeyboardButton("🏆 TOP reyting", callback_data='top_rating')],
         [InlineKeyboardButton("ℹ️ Yordam", callback_data='help')]
     ]
-    if user_id == ADMIN_ID:
+    if user_id in ADMIN_IDS:
         keyboard.append([InlineKeyboardButton("👨‍💼 Admin panel", callback_data='admin_panel')])
     return InlineKeyboardMarkup(keyboard)
 
@@ -255,7 +251,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     user_id = query.from_user.id
 
-    if user_id != ADMIN_ID:
+   if user_id not in ADMIN_IDS:
         await query.answer("❌ Sizda admin huquqi yo'q!", show_alert=True)
         return
 
