@@ -330,18 +330,24 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_callback))
 
-    # Render da WEBHOOK_URL bo'lsa webhook, bo'lmasa polling
-    if WEBHOOK_URL:
-        print(f"✅ Bot webhook rejimida ishga tushdi: {WEBHOOK_URL}")
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            webhook_url=f"{WEBHOOK_URL}/webhook",
-            url_path="/webhook"
-        )
-    else:
-        print("✅ Bot polling rejimida ishga tushdi!")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    def main():
+    if not TOKEN:
+        raise Exception("BOT_TOKEN yo'q!")
+
+    init_db()
+
+    application = Application.builder().token(TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_callback))
+
+    print("✅ Bot polling rejimida ishga tushdi!")
+
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True
+    )
 
 if __name__ == '__main__':
     main()
+
