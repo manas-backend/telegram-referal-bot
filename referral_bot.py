@@ -349,7 +349,7 @@ def main():
 
     print("✅ Bot polling rejimida ishga tushdi!")
     def run_flask():
-    app.run(host="0.0.0.0", port=PORT)
+        app.run(host="0.0.0.0", port=PORT)
 
     Thread(target=run_flask).start()
 
