@@ -251,7 +251,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     user_id = query.from_user.id
 
-   if user_id not in ADMIN_IDS:
+    if user_id not in ADMIN_IDS:
         await query.answer("❌ Sizda admin huquqi yo'q!", show_alert=True)
         return
 
