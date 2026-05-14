@@ -52,11 +52,21 @@ def init_db():
         is_active INTEGER DEFAULT 1
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS referrals (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        referrer_id INTEGER,
-        referred_id INTEGER,
-        date TEXT
+       user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        first_name TEXT,
+        referred_by INTEGER,
+        referral_count INTEGER DEFAULT 0,
+        join_date TEXT,
+        is_active INTEGER DEFAULT 1,
+        is_subscribed INTEGER DEFAULT 0  -- Yangi field
     )''')
+    # Mavjud bazaga yangi ustunni qo'shib qo'yish (xatolik bermasligi uchun try-except ichida)
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN is_subscribed INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass # Ustun allaqachon mavjud bo'lsa
+        
     conn.commit()
     conn.close()
 
@@ -172,18 +182,37 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
 
-    is_joined = await check_subscription(user_id, context)
-    if not is_joined:
-        keyboard = [
-            [InlineKeyboardButton("📢 Kanalga obuna bo'lish", url="https://t.me/super_olimpiada")],
-            [InlineKeyboardButton("✅ Tekshirish", callback_data="back_to_menu")]
-        ]
-        await update.message.reply_text(
-            "❌ Botdan foydalanish uchun avval kanalga obuna bo'ling!",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return  # Obuna bo'lmagan bo'lsa, pastdagi kodlar ishlamaydi
+# 1. Avval DB dan tekshiramiz
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT is_subscribed FROM users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
 
+    # Agar oldin tasdiqlangan bo'lsa, o'tkazib yuboramiz
+    if row and row[0] == 1:
+        pass
+    else:
+        is_joined = await check_subscription(user_id, context)
+
+        if not is_joined:
+            keyboard = [
+                [InlineKeyboardButton("📢 Kanalga obuna bo'lish", url=GROUP_LINK)],
+                [InlineKeyboardButton("✅ Tekshirish", callback_data="check_sub")]
+            ]
+            await update.message.reply_text(
+                "❌ Botdan foydalanish uchun kanalga obuna bo'ling!",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+        # Obuna bo'lgan bo'lsa, DB ga yozamiz (fayl mavjud bo'lsa)
+        if row:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("UPDATE users SET is_subscribed = 1 WHERE user_id = ?", (user_id,))
+            conn.commit()
+            conn.close()
     
     username = user.username or ""
     first_name = user.first_name or "Foydalanuvchi"
@@ -380,6 +409,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_joined:
             await query.answer("❌ Hali obuna bo‘lmagansiz!", show_alert=True)
             return
+
+        # DB ga yozib qo'yamiz
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("UPDATE users SET is_subscribed = 1 WHERE user_id = ?", (user_id,))
+        conn.commit()
+        conn.close()
 
         await query.answer("✅ Obuna tasdiqlandi!")
         await back_to_menu_callback(update, context)
