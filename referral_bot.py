@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 GROUP_LINK = "https://t.me/super_olimpiada"
 
 # Database yo'li - Render da /data papkasi doimiy
-DB_PATH = os.getenv("DB_PATH", "referral_bot.db")
+DB_PATH = "/tmp/referral_bot.db"
 
 # ─────────────────────────── DATABASE ───────────────────────────
 
