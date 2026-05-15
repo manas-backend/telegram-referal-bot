@@ -118,10 +118,17 @@ async def search_user(query):
     query = query.strip().lstrip("@")
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
+        
+        # 1. Agar faqat raqam yozilsa, Telegram ID bo'yicha qidiradi
         if query.isdigit():
             async with db.execute("SELECT * FROM users WHERE user_id=?", (int(query),)) as c:
                 return await c.fetchall()
-        async with db.execute("SELECT * FROM users WHERE username LIKE ?", (f"%{query}%",)) as c:
+        
+        # 2. Matn yozilsa, ham username, ham ism (full_name) ichidan qidiradi
+        async with db.execute(
+            "SELECT * FROM users WHERE username LIKE ? OR full_name LIKE ?", 
+            (f"%{query}%", f"%{query}%")
+        ) as c:
             return await c.fetchall()
 
 async def get_all_user_ids():
