@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+from datetime import datetime
 import aiosqlite
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import CommandStart
@@ -11,15 +13,26 @@ from aiogram.types import (
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiohttp import web  # Render uchun veb-server
 
 # ============================================================
-#  SOZLAMALAR — faqat shu yerni o'zgartiring
+#  SOZLAMALAR — Render Environment Variables orqali ishlaydi
 # ============================================================
-BOT_TOKEN    = "5396264572:AAGgAa9jZFw6j4mi4DTxqzzVNBOrfrXR9v8"           # @BotFather dan oling
-CHANNEL_ID   = "@englishhshsa"        # Kanal username yoki -100... ID
-CHANNEL_LINK = "https://t.me/englishhshsa"    # Kanalga to'g'ridan havola
-ADMIN_IDS    = [1903774542,7337282308,7274663765]                     # Admin(lar) Telegram ID si
-DB_NAME      = "bot.db"
+BOT_TOKEN    = os.getenv("BOT_TOKEN", )
+CHANNEL_ID   = os.getenv("CHANNEL_ID", "@englishhshsa")
+CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/englishhshsa")
+
+# Admin IDs ni matndan raqamlar ro'yxatiga o'tkazish
+admin_env    = os.getenv("ADMIN_IDS", ")
+ADMIN_IDS    = [int(x.strip()) for x in admin_env.split(",") if x.strip().isdigit()]
+
+# Render diski ulangan bo'lsa /data/bot.db, aks holda shunchaki bot.db
+if os.path.exists("/data"):
+    DB_NAME = "/data/bot.db"
+else:
+    DB_NAME = "bot.db"
+
+PORT = int(os.getenv("PORT", 8080))
 # ============================================================
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -27,9 +40,8 @@ log = logging.getLogger(__name__)
 
 router = Router()
 
-
 # ─────────────────────────────────────────────
-#  DATABASE
+#  DATABASE FUNKSIYALARI (O'ZGARISHSIZ QOLDI)
 # ─────────────────────────────────────────────
 
 async def init_db():
@@ -54,13 +66,11 @@ async def init_db():
         """)
         await db.commit()
 
-
 async def get_user(user_id):
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)) as c:
             return await c.fetchone()
-
 
 async def add_user(user_id, username, full_name, referred_by=None):
     async with aiosqlite.connect(DB_NAME) as db:
@@ -69,7 +79,6 @@ async def add_user(user_id, username, full_name, referred_by=None):
             (user_id, username or "", full_name, referred_by)
         )
         await db.commit()
-
 
 async def add_referral(referrer_id, referred_id):
     async with aiosqlite.connect(DB_NAME) as db:
@@ -81,7 +90,6 @@ async def add_referral(referrer_id, referred_id):
         await db.commit()
         return True
 
-
 async def get_top_users(limit=10):
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
@@ -90,7 +98,6 @@ async def get_top_users(limit=10):
             (limit,)
         ) as c:
             return await c.fetchall()
-
 
 async def get_user_referrals(user_id):
     async with aiosqlite.connect(DB_NAME) as db:
@@ -102,12 +109,10 @@ async def get_user_referrals(user_id):
         """, (user_id,)) as c:
             return await c.fetchall()
 
-
 async def get_total_users():
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT COUNT(*) FROM users") as c:
             return (await c.fetchone())[0]
-
 
 async def search_user(query):
     query = query.strip().lstrip("@")
@@ -119,15 +124,13 @@ async def search_user(query):
         async with db.execute("SELECT * FROM users WHERE username LIKE ?", (f"%{query}%",)) as c:
             return await c.fetchall()
 
-
 async def get_all_user_ids():
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT user_id FROM users") as c:
             return [r[0] for r in await c.fetchall()]
 
-
 # ─────────────────────────────────────────────
-#  KLAVIATURALAR
+#  KLAVIATURALAR VA HANDLERLAR (O'ZGARISHSIZ)
 # ─────────────────────────────────────────────
 
 def main_kb(user_id):
@@ -139,13 +142,11 @@ def main_kb(user_id):
         rows.append([KeyboardButton(text="⚙️ Admin panel")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
-
 def sub_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📢 Kanalga obuna bo'lish", url=CHANNEL_LINK)],
         [InlineKeyboardButton(text="✅ Obuna bo'ldim", callback_data="check_sub")],
     ])
-
 
 def admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -154,16 +155,10 @@ def admin_kb():
         [InlineKeyboardButton(text="📈 Statistika", callback_data="stats")],
     ])
 
-
 def cancel_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel")]
     ])
-
-
-# ─────────────────────────────────────────────
-#  YORDAMCHI
-# ─────────────────────────────────────────────
 
 async def is_subscribed(bot: Bot, user_id):
     try:
@@ -172,19 +167,9 @@ async def is_subscribed(bot: Bot, user_id):
     except Exception:
         return False
 
-
-# ─────────────────────────────────────────────
-#  FSM
-# ─────────────────────────────────────────────
-
 class St(StatesGroup):
     broadcast = State()
     search    = State()
-
-
-# ─────────────────────────────────────────────
-#  HANDLERLAR
-# ─────────────────────────────────────────────
 
 @router.message(CommandStart())
 async def cmd_start(msg: Message, bot: Bot):
@@ -212,7 +197,6 @@ async def cmd_start(msg: Message, bot: Bot):
         )
         return
 
-    # Referal hisoblash
     if referred_by and not existing:
         added = await add_referral(referred_by, user.id)
         if added:
@@ -229,7 +213,6 @@ async def cmd_start(msg: Message, bot: Bot):
         f"✅ Xush kelibsiz, <b>{user.full_name}</b>!",
         parse_mode="HTML", reply_markup=main_kb(user.id)
     )
-
 
 @router.callback_query(F.data == "check_sub")
 async def check_sub(call: CallbackQuery, bot: Bot):
@@ -254,7 +237,6 @@ async def check_sub(call: CallbackQuery, bot: Bot):
     await call.message.edit_text(f"✅ Obuna tasdiqlandi! Xush kelibsiz, <b>{user.full_name}</b>!", parse_mode="HTML")
     await bot.send_message(user.id, "Menyudan birini tanlang:", reply_markup=main_kb(user.id))
 
-
 @router.message(F.text == "🔗 Referal havolam")
 async def my_ref(msg: Message, bot: Bot):
     if not await is_subscribed(bot, msg.from_user.id):
@@ -266,8 +248,6 @@ async def my_ref(msg: Message, bot: Bot):
     user_data = await get_user(msg.from_user.id)
     count = user_data["referral_count"] if user_data else 0
     
-    # Havolani <a> tegi bilan o'rasangiz u ko'k rangda bo'ladi
-    # Barcha matnni bitta o'zgaruvchiga yig'ib olamiz
     text = (
         f"🔗 <b>Sizning referal havolangiz:</b>\n\n"
         f"{link}\n"
@@ -277,12 +257,7 @@ async def my_ref(msg: Message, bot: Bot):
         f"📢 <b>Guruhga kirish:</b> https://t.me/super_olimpiada"
     )
 
-    await msg.answer(
-        text=text,
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
-
+    await msg.answer(text=text, parse_mode="HTML", disable_web_page_preview=True)
 
 @router.message(F.text == "📊 Statistikam")
 async def my_stats(msg: Message, bot: Bot):
@@ -308,7 +283,6 @@ async def my_stats(msg: Message, bot: Bot):
 
     await msg.answer(text, parse_mode="HTML")
 
-
 @router.message(F.text == "🏆 Top reyting")
 async def top(msg: Message, bot: Bot):
     if not await is_subscribed(bot, msg.from_user.id):
@@ -325,7 +299,6 @@ async def top(msg: Message, bot: Bot):
         text += f"{medals[i]} <b>{u['full_name'] or 'Nomalum'}</b> {uname} — <b>{u['referral_count']}</b> kishi\n"
     await msg.answer(text, parse_mode="HTML")
 
-
 @router.message(F.text == "❓ Yordam")
 async def help_cmd(msg: Message):
     await msg.answer(
@@ -337,9 +310,6 @@ async def help_cmd(msg: Message):
         parse_mode="HTML"
     )
 
-
-# ── ADMIN ─────────────────────────────────────────────────────
-
 @router.message(F.text == "⚙️ Admin panel")
 async def admin_panel(msg: Message):
     if msg.from_user.id not in ADMIN_IDS:
@@ -349,7 +319,6 @@ async def admin_panel(msg: Message):
         f"⚙️ <b>Admin panel</b>\n\n👥 Jami foydalanuvchilar: <b>{total}</b>",
         parse_mode="HTML", reply_markup=admin_kb()
     )
-
 
 @router.callback_query(F.data == "stats")
 async def admin_stats(call: CallbackQuery):
@@ -362,7 +331,6 @@ async def admin_stats(call: CallbackQuery):
         text += f"  {i}. {u['full_name'] or 'Nomalum'} — {u['referral_count']} kishi\n"
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=admin_kb())
 
-
 @router.callback_query(F.data == "broadcast")
 async def broadcast_start(call: CallbackQuery, state: FSMContext):
     if call.from_user.id not in ADMIN_IDS:
@@ -372,7 +340,6 @@ async def broadcast_start(call: CallbackQuery, state: FSMContext):
         "📨 Barcha foydalanuvchilarga yuboriladigan xabarni yozing\n(matn, rasm, video — istalgan):",
         reply_markup=cancel_kb()
     )
-
 
 @router.message(St.broadcast)
 async def do_broadcast(msg: Message, bot: Bot, state: FSMContext):
@@ -399,7 +366,6 @@ async def do_broadcast(msg: Message, bot: Bot, state: FSMContext):
         parse_mode="HTML"
     )
 
-
 @router.callback_query(F.data == "search")
 async def search_start(call: CallbackQuery, state: FSMContext):
     if call.from_user.id not in ADMIN_IDS:
@@ -409,7 +375,6 @@ async def search_start(call: CallbackQuery, state: FSMContext):
         "🔍 Foydalanuvchi <b>username</b> yoki <b>ID</b> sini kiriting:",
         parse_mode="HTML", reply_markup=cancel_kb()
     )
-
 
 @router.message(St.search)
 async def do_search(msg: Message, state: FSMContext):
@@ -434,9 +399,7 @@ async def do_search(msg: Message, state: FSMContext):
             f"🔗 Kim orqali: <code>{referred_by}</code>\n"
             f"📅 Qo'shilgan: {joined_at}"
         )
-        
         await msg.answer(text, parse_mode="HTML")
-
 
 @router.callback_query(F.data == "cancel")
 async def cancel(call: CallbackQuery, state: FSMContext):
@@ -447,19 +410,48 @@ async def cancel(call: CallbackQuery, state: FSMContext):
         parse_mode="HTML", reply_markup=admin_kb()
     )
 
+# ─────────────────────────────────────────────
+#  RENDER UCHUN SOXTA VEB-SERVER (WEB SITE)
+# ─────────────────────────────────────────────
+
+async def handle_web(request):
+    return web.Response(text="Bot muvaffaqiyatli ishlayapti ✅")
+
+async def start_web_server():
+    webapp = web.Application()
+    webapp.router.add_get('/', handle_web)
+    runner = web.AppRunner(webapp)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    log.info(f"Veb-server {PORT}-portda ishga tushdi.")
 
 # ─────────────────────────────────────────────
-#  ISHGA TUSHIRISH
+#  ISHGA TUSHIRISH (MAIN)
 # ─────────────────────────────────────────────
 
 async def main():
+    if not BOT_TOKEN:
+        log.error("XATO: BOT_TOKEN o'zgaruvchisi topilmadi!")
+        return
+
+    await init_db()
+    
     bot = Bot(token=BOT_TOKEN)
     dp  = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
-    await init_db()
-    log.info("Bot ishga tushdi ✅")
+    
+    # Veb-serverni bot bilan parallel ishga tushiramiz
+    await start_web_server()
+    
+    log.info("Bot polling rejimida ishga tushdi ✅")
+    
+    # Eski so'rovlarni o'chirib yuborish (Render qayta yonganda tiqilinch bo'lmasligi uchun)
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        log.info("Bot to'xtatildi.")
