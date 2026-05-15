@@ -19,8 +19,8 @@ from aiohttp import web  # Render uchun veb-server
 #  SOZLAMALAR — Render Environment Variables orqali ishlaydi
 # ============================================================
 BOT_TOKEN    = os.getenv("BOT_TOKEN")
-CHANNEL_ID   = os.getenv("CHANNEL_ID", "@englishhshsa")
-CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/englishhshsa")
+CHANNEL_ID   = os.getenv("CHANNEL_ID", "@super_olimpiada")
+CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/super_olimpiada")
 
 # Admin IDs ni matndan raqamlar ro'yxatiga o'tkazish
 admin_env    = os.getenv("ADMIN_IDS")
