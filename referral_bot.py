@@ -18,12 +18,12 @@ from aiohttp import web  # Render uchun veb-server
 # ============================================================
 #  SOZLAMALAR — Render Environment Variables orqali ishlaydi
 # ============================================================
-BOT_TOKEN    = os.getenv("BOT_TOKEN", )
+BOT_TOKEN    = os.getenv("BOT_TOKEN")
 CHANNEL_ID   = os.getenv("CHANNEL_ID", "@englishhshsa")
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/englishhshsa")
 
 # Admin IDs ni matndan raqamlar ro'yxatiga o'tkazish
-admin_env    = os.getenv("ADMIN_IDS", ")
+admin_env    = os.getenv("ADMIN_IDS")
 ADMIN_IDS    = [int(x.strip()) for x in admin_env.split(",") if x.strip().isdigit()]
 
 # Render diski ulangan bo'lsa /data/bot.db, aks holda shunchaki bot.db
