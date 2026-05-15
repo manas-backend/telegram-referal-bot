@@ -1,480 +1,465 @@
-
-
-from flask import Flask
-from threading import Thread
+import asyncio
 import logging
-import os
-import sqlite3
-from datetime import datetime
-from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    ChatJoinRequestHandler
+import aiosqlite
+from aiogram import Bot, Dispatcher, Router, F
+from aiogram.filters import CommandStart
+from aiogram.types import (
+    Message, CallbackQuery,
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton
 )
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
-load_dotenv()
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS").split(",")))
-PORT = int(os.getenv("PORT", 8080))
-app = Flask(__name__)
+# ============================================================
+#  SOZLAMALAR — faqat shu yerni o'zgartiring
+# ============================================================
+BOT_TOKEN    = "5396264572:AAGgAa9jZFw6j4mi4DTxqzzVNBOrfrXR9v8"           # @BotFather dan oling
+CHANNEL_ID   = "@englishhshsa"        # Kanal username yoki -100... ID
+CHANNEL_LINK = "https://t.me/englishhshsa"    # Kanalga to'g'ridan havola
+ADMIN_IDS    = [1903774542,7337282308,7274663765]                     # Admin(lar) Telegram ID si
+DB_NAME      = "bot.db"
+# ============================================================
 
-@app.route('/')
-def home():
-    return "Bot ishlayapti!"
-    
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
 
-GROUP_LINK = "https://t.me/englishhshsa"
-
-# Database yo'li - Render da /data papkasi doimiy
-DB_PATH = "referral_bot.db"
-
-# ─────────────────────────── DATABASE ───────────────────────────
-
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    # Foydalanuvchilar jadvali
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        username TEXT,
-        first_name TEXT,
-        referred_by INTEGER,
-        referral_count INTEGER DEFAULT 0,
-        join_date TEXT,
-        is_active INTEGER DEFAULT 1,
-        is_subscribed INTEGER DEFAULT 0
-    )''')
-    
-    # Agar is_subscribed ustuni bo'lmasa, qo'shish
-    try:
-        c.execute("ALTER TABLE users ADD COLUMN is_subscribed INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-
-    # Referallar bog'lanish jadvali (TO'G'RILANGAN)
-    c.execute('''CREATE TABLE IF NOT EXISTS referrals (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        referrer_id INTEGER,
-        referred_id INTEGER,
-        date TEXT
-    )''')
-    
-    conn.commit()
-    conn.close()
-
-def add_user(user_id, username, first_name, referred_by=None):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
-    if c.fetchone():
-        conn.close()
-        return False
-    c.execute('''INSERT INTO users (user_id, username, first_name, referred_by, join_date)
-                 VALUES (?, ?, ?, ?, ?)''',
-              (user_id, username, first_name, referred_by, datetime.now().isoformat()))
-    if referred_by:
-        c.execute('UPDATE users SET referral_count = referral_count + 1 WHERE user_id = ?',
-                  (referred_by,))
-        c.execute('INSERT INTO referrals (referrer_id, referred_id, date) VALUES (?, ?, ?)',
-                  (referred_by, user_id, datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
-    return True
-
-def get_user_stats(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('SELECT referral_count, join_date FROM users WHERE user_id = ?', (user_id,))
-    result = c.fetchone()
-    if result:
-        referral_count, join_date = result
-        c.execute('''SELECT u.first_name, u.username, r.date
-                     FROM referrals r
-                     JOIN users u ON r.referred_id = u.user_id
-                     WHERE r.referrer_id = ?
-                     ORDER BY r.date DESC''', (user_id,))
-        referrals = c.fetchall()
-        conn.close()
-        return referral_count, join_date, referrals
-    conn.close()
-    return None, None, []
-
-def get_top_users(limit=10):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''SELECT user_id, first_name, username, referral_count
-                 FROM users WHERE is_active = 1
-                 ORDER BY referral_count DESC LIMIT ?''', (limit,))
-    top_users = c.fetchall()
-    conn.close()
-    return top_users
-
-def get_total_stats():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('SELECT COUNT(*) FROM users')
-    total_users = c.fetchone()[0]
-    c.execute('SELECT COUNT(*) FROM users WHERE referred_by IS NOT NULL')
-    referred_users = c.fetchone()[0]
-    c.execute('SELECT COUNT(*) FROM users WHERE referral_count > 0')
-    active_referrers = c.fetchone()[0]
-    conn.close()
-    return total_users, referred_users, active_referrers
-
-# ─────────────────────────── HANDLERS ───────────────────────────
-async def check_subscription(user_id, context):
-    chat_id = "https://t.me/englishhshsa"  # kanal username
-    try:
-        member = await context.bot.get_chat_member(chat_id, user_id)
-        if member.status in ["member", "administrator", "creator"]:
-            return True
-    except:
-        return False
-    return False
-    
-async def join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.chat_join_request.from_user
-    chat_id = update.chat_join_request.chat.id
-
-    # kanalga avtomatik qo‘shish (approve)
-    await context.bot.approve_chat_join_request(
-        chat_id=chat_id,
-        user_id=user.id
-    )
-
-    # userni bazaga qo‘shish
-    add_user(
-        user.id,
-        user.username or "",
-        user.first_name or "User"
-    )
-
-    # referral bonus (ixtiyoriy)
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute(
-        "UPDATE users SET referral_count = referral_count + 1 WHERE user_id = ?",
-        (user.id,)
-    )
-    conn.commit()
-    conn.close()
+router = Router()
 
 
-def make_main_keyboard(user_id):
-    keyboard = [
-        [InlineKeyboardButton("📊 Mening statistikam", callback_data='my_stats')],
-        [InlineKeyboardButton("🏆 TOP reyting", callback_data='top_rating')],
-        [InlineKeyboardButton("ℹ️ Yordam", callback_data='help')]
+# ─────────────────────────────────────────────
+#  DATABASE
+# ─────────────────────────────────────────────
+
+async def init_db():
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id        INTEGER PRIMARY KEY,
+                username       TEXT,
+                full_name      TEXT,
+                referred_by    INTEGER,
+                referral_count INTEGER DEFAULT 0,
+                joined_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS referrals (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                referrer_id INTEGER,
+                referred_id INTEGER,
+                joined_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.commit()
+
+
+async def get_user(user_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)) as c:
+            return await c.fetchone()
+
+
+async def add_user(user_id, username, full_name, referred_by=None):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO users (user_id, username, full_name, referred_by) VALUES (?,?,?,?)",
+            (user_id, username or "", full_name, referred_by)
+        )
+        await db.commit()
+
+
+async def add_referral(referrer_id, referred_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT id FROM referrals WHERE referred_id=?", (referred_id,)) as c:
+            if await c.fetchone():
+                return False
+        await db.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (?,?)", (referrer_id, referred_id))
+        await db.execute("UPDATE users SET referral_count = referral_count+1 WHERE user_id=?", (referrer_id,))
+        await db.commit()
+        return True
+
+
+async def get_top_users(limit=10):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT user_id, full_name, username, referral_count FROM users ORDER BY referral_count DESC LIMIT ?",
+            (limit,)
+        ) as c:
+            return await c.fetchall()
+
+
+async def get_user_referrals(user_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT u.full_name, u.username, r.joined_at
+            FROM referrals r JOIN users u ON u.user_id=r.referred_id
+            WHERE r.referrer_id=? ORDER BY r.joined_at DESC
+        """, (user_id,)) as c:
+            return await c.fetchall()
+
+
+async def get_total_users():
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT COUNT(*) FROM users") as c:
+            return (await c.fetchone())[0]
+
+
+async def search_user(query):
+    query = query.strip().lstrip("@")
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        if query.isdigit():
+            async with db.execute("SELECT * FROM users WHERE user_id=?", (int(query),)) as c:
+                return await c.fetchall()
+        async with db.execute("SELECT * FROM users WHERE username LIKE ?", (f"%{query}%",)) as c:
+            return await c.fetchall()
+
+
+async def get_all_user_ids():
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT user_id FROM users") as c:
+            return [r[0] for r in await c.fetchall()]
+
+
+# ─────────────────────────────────────────────
+#  KLAVIATURALAR
+# ─────────────────────────────────────────────
+
+def main_kb(user_id):
+    rows = [
+        [KeyboardButton(text="🔗 Referal havolam"), KeyboardButton(text="📊 Statistikam")],
+        [KeyboardButton(text="🏆 Top reyting"),     KeyboardButton(text="❓ Yordam")],
     ]
     if user_id in ADMIN_IDS:
-        keyboard.append([InlineKeyboardButton("👨‍💼 Admin panel", callback_data='admin_panel')])
-    return InlineKeyboardMarkup(keyboard)
+        rows.append([KeyboardButton(text="⚙️ Admin panel")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = user.id
 
-# 1. Avval DB dan tekshiramiz
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT is_subscribed FROM users WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-    conn.close()
+def sub_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Kanalga obuna bo'lish", url=CHANNEL_LINK)],
+        [InlineKeyboardButton(text="✅ Obuna bo'ldim", callback_data="check_sub")],
+    ])
 
-    # Agar oldin tasdiqlangan bo'lsa, o'tkazib yuboramiz
-    if row and row[0] == 1:
-        pass
-    else:
-        is_joined = await check_subscription(user_id, context)
 
-        if not is_joined:
-            keyboard = [
-                [InlineKeyboardButton("📢 Kanalga obuna bo'lish", url=GROUP_LINK)],
-                [InlineKeyboardButton("✅ Tekshirish", callback_data="check_sub")]
-            ]
-            await update.message.reply_text(
-                "❌ Botdan foydalanish uchun kanalga obuna bo'ling!",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-            return
+def admin_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📨 Hammaga xabar", callback_data="broadcast")],
+        [InlineKeyboardButton(text="🔍 Foydalanuvchi qidirish", callback_data="search")],
+        [InlineKeyboardButton(text="📈 Statistika", callback_data="stats")],
+    ])
 
-        # Obuna bo'lgan bo'lsa, DB ga yozamiz (fayl mavjud bo'lsa)
-        if row:
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("UPDATE users SET is_subscribed = 1 WHERE user_id = ?", (user_id,))
-            conn.commit()
-            conn.close()
-    
-    username = user.username or ""
-    first_name = user.first_name or "Foydalanuvchi"
 
+def cancel_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel")]
+    ])
+
+
+# ─────────────────────────────────────────────
+#  YORDAMCHI
+# ─────────────────────────────────────────────
+
+async def is_subscribed(bot: Bot, user_id):
+    try:
+        m = await bot.get_chat_member(CHANNEL_ID, user_id)
+        return m.status not in ("left", "kicked", "restricted")
+    except Exception:
+        return False
+
+
+# ─────────────────────────────────────────────
+#  FSM
+# ─────────────────────────────────────────────
+
+class St(StatesGroup):
+    broadcast = State()
+    search    = State()
+
+
+# ─────────────────────────────────────────────
+#  HANDLERLAR
+# ─────────────────────────────────────────────
+
+@router.message(CommandStart())
+async def cmd_start(msg: Message, bot: Bot):
+    user = msg.from_user
+    args = msg.text.split()
     referred_by = None
-    if context.args:
+
+    if len(args) > 1:
         try:
-            referred_by = int(context.args[0])
-            if referred_by == user_id:
-                referred_by = None
-        except:
+            ref = int(args[1])
+            if ref != user.id:
+                referred_by = ref
+        except ValueError:
             pass
 
-    is_new = add_user(user_id, username, first_name, referred_by)
+    existing = await get_user(user.id)
+    if not existing:
+        await add_user(user.id, user.username, user.full_name, referred_by)
 
-    bot_username = context.bot.username
-    referral_link = f"https://t.me/{bot_username}?start={user_id}"
+    if not await is_subscribed(bot, user.id):
+        await msg.answer(
+            f"👋 Salom, <b>{user.full_name}</b>!\n\n"
+            "📢 Botdan foydalanish uchun avval kanalga obuna bo'ling:",
+            parse_mode="HTML", reply_markup=sub_kb()
+        )
+        return
 
-    if is_new and referred_by:
-        salom = "✅ Siz muvaffaqiyatli ro'yxatdan o'tdingiz!\n\n"
-    elif is_new:
-        salom = "✅ Botga xush kelibsiz!\n\n"
-    else:
-        salom = "👋 Qaytganingizdan xursandmiz!\n\n"
+    # Referal hisoblash
+    if referred_by and not existing:
+        added = await add_referral(referred_by, user.id)
+        if added:
+            try:
+                await bot.send_message(
+                    referred_by,
+                    f"🎉 <b>{user.full_name}</b> (@{user.username or '—'}) siz orqali qo'shildi!",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
 
-    message = (
-        f"🎉 Assalomu alaykum, <b>{first_name}</b>!\n\n"
-        f"{salom}"
-        f"🔗 Sizning referal linkingiz:\n"
-        f"<a href=\"{referral_link}\">👉 Do'stlarga yuborish uchun bosing</a>\n\n"
-        f"👥 Guruhga kirish: <a href=\"{GROUP_LINK}\">Super Olimpiada</a>\n\n"
-        f"Do'stlaringizni taklif qiling va TOP reytingga chiqing! 🏆"
+    await msg.answer(
+        f"✅ Xush kelibsiz, <b>{user.full_name}</b>!",
+        parse_mode="HTML", reply_markup=main_kb(user.id)
     )
 
-    await update.message.reply_text(
-        message,
-        reply_markup=make_main_keyboard(user_id),
-        parse_mode='HTML',
+
+@router.callback_query(F.data == "check_sub")
+async def check_sub(call: CallbackQuery, bot: Bot):
+    user = call.from_user
+    if not await is_subscribed(bot, user.id):
+        await call.answer("❌ Hali obuna bo'lmagansiz!", show_alert=True)
+        return
+
+    user_data = await get_user(user.id)
+    if user_data and user_data["referred_by"]:
+        added = await add_referral(user_data["referred_by"], user.id)
+        if added:
+            try:
+                await bot.send_message(
+                    user_data["referred_by"],
+                    f"🎉 <b>{user.full_name}</b> (@{user.username or '—'}) siz orqali qo'shildi!",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+    await call.message.edit_text(f"✅ Obuna tasdiqlandi! Xush kelibsiz, <b>{user.full_name}</b>!", parse_mode="HTML")
+    await bot.send_message(user.id, "Menyudan birini tanlang:", reply_markup=main_kb(user.id))
+
+
+@router.message(F.text == "🔗 Referal havolam")
+async def my_ref(msg: Message, bot: Bot):
+    if not await is_subscribed(bot, msg.from_user.id):
+        await msg.answer("❌ Avval kanalga obuna bo'ling!", reply_markup=sub_kb())
+        return
+    
+    me = await bot.get_me()
+    link = f"https://t.me/{me.username}?start={msg.from_user.id}"
+    user_data = await get_user(msg.from_user.id)
+    count = user_data["referral_count"] if user_data else 0
+    
+    # Havolani <a> tegi bilan o'rasangiz u ko'k rangda bo'ladi
+    # Barcha matnni bitta o'zgaruvchiga yig'ib olamiz
+    text = (
+        f"🔗 <b>Sizning referal havolangiz:</b>\n\n"
+        f"{link}\n"
+        f"☝️ <i>Nusxa olish uchun ustiga bosing:</i>\n\n"
+        f"👥 Siz orqali qo'shilganlar: <b>{count} kishi</b>\n\n"
+        f"💡 Havolani do'stlaringizga yuboring va reytingda yuqoriga chiqing!\n\n"
+        f"📢 <b>Guruhga kirish:</b> https://t.me/super_olimpiada"
+    )
+
+    await msg.answer(
+        text=text,
+        parse_mode="HTML",
         disable_web_page_preview=True
     )
 
-async def my_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
 
-    user_id = query.from_user.id
-    referral_count, join_date, referrals = get_user_stats(user_id)
+@router.message(F.text == "📊 Statistikam")
+async def my_stats(msg: Message, bot: Bot):
+    if not await is_subscribed(bot, msg.from_user.id):
+        await msg.answer("❌ Avval kanalga obuna bo'ling!", reply_markup=sub_kb())
+        return
+    user_data = await get_user(msg.from_user.id)
+    referrals = await get_user_referrals(msg.from_user.id)
+    count = user_data["referral_count"] if user_data else 0
+    joined = str(user_data["joined_at"])[:10] if user_data else "—"
 
-    bot_username = context.bot.username
-    referral_link = f"https://t.me/{bot_username}?start={user_id}"
-
-    message = (
+    text = (
         f"📊 <b>Sizning statistikangiz</b>\n\n"
-        f"👥 Taklif qilganlar: <b>{referral_count}</b> kishi\n"
-        f"📅 Qo'shilgan sana: {join_date[:10]}\n\n"
-        f"🔗 Referal linkingiz:\n"
-        f"<a href=\"{referral_link}\">👉 Do'stlarga yuborish uchun bosing</a>\n\n"
+        f"👤 Ism: <b>{msg.from_user.full_name}</b>\n"
+        f"🆔 ID: <code>{msg.from_user.id}</code>\n"
+        f"📅 Qo'shilgan: <b>{joined}</b>\n"
+        f"👥 Taklif qilganlar: <b>{count} kishi</b>\n"
     )
-
     if referrals:
-        message += "<b>Taklif qilgan foydalanuvchilaringiz:</b>\n"
-        for i, (name, uname, date) in enumerate(referrals[:10], 1):
-            utext = f"@{uname}" if uname else ""
-            message += f"{i}. {name} {utext} - {date[:10]}\n"
-        if len(referrals) > 10:
-            message += f"\n<i>... va yana {len(referrals) - 10} kishi</i>\n"
-    else:
-        message += "<i>Hali hech kimni taklif qilmadingiz</i>\n"
+        text += "\n<b>So'nggi taklif qilinganlar:</b>\n"
+        for i, r in enumerate(referrals[:5], 1):
+            text += f"  {i}. {r['full_name'] or 'Nomalum'} — {str(r['joined_at'])[:10]}\n"
 
-    keyboard = [[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]]
-    await query.edit_message_text(
-        message,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='HTML',
-        disable_web_page_preview=True
-    )
+    await msg.answer(text, parse_mode="HTML")
 
-async def top_rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
 
-    top_users = get_top_users(10)
-    medals = ["🥇", "🥈", "🥉"]
-    message = "<b>🏆 TOP 10 REYTING</b>\n\nEng ko'p odam taklif qilganlar:\n\n"
-
-    for i, (uid, name, uname, count) in enumerate(top_users, 1):
-        medal = medals[i-1] if i <= 3 else f"{i}."
-        utext = f"@{uname}" if uname else ""
-        message += f"{medal} {name} {utext} — <b>{count}</b> kishi\n"
-
-    if not top_users:
-        message += "<i>Hali statistika yo'q</i>\n"
-
-    keyboard = [[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]]
-    await query.edit_message_text(
-        message,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='HTML'
-    )
-
-async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    message = (
-        "<b>ℹ️ YORDAM</b>\n\n"
-        "Botdan foydalanish juda oson!\n\n"
-        "1️⃣ Referal linkingizni do'stlaringizga yuboring\n"
-        "2️⃣ Ular link orqali botga qo'shilishadi\n"
-        "3️⃣ Har bir yangi foydalanuvchi sizning hisobingizga qo'shiladi\n"
-        "4️⃣ TOP reytingda o'rningizni kuzatib boring\n\n"
-        "<b>💡 Maslahat:</b> Linkni ijtimoiy tarmoqlarda ulashing!"
-    )
-
-    keyboard = [[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]]
-    await query.edit_message_text(
-        message,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='HTML'
-    )
-
-async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-
-    if user_id not in ADMIN_IDS:
-        await query.answer("❌ Sizda admin huquqi yo'q!", show_alert=True)
+@router.message(F.text == "🏆 Top reyting")
+async def top(msg: Message, bot: Bot):
+    if not await is_subscribed(bot, msg.from_user.id):
+        await msg.answer("❌ Avval kanalga obuna bo'ling!", reply_markup=sub_kb())
         return
-
-    await query.answer()
-    total_users, referred_users, active_referrers = get_total_stats()
-    conv = (referred_users / total_users * 100) if total_users > 0 else 0
-
-    message = (
-        "<b>👨‍💼 ADMIN PANEL</b>\n\n"
-        f"👥 Jami foydalanuvchilar: <b>{total_users}</b>\n"
-        f"🔗 Referal orqali kelganlar: <b>{referred_users}</b>\n"
-        f"⭐ Faol taklif qiluvchilar: <b>{active_referrers}</b>\n\n"
-        f"📊 Konversiya: <b>{conv:.1f}%</b>"
-    )
-
-    keyboard = [
-        [InlineKeyboardButton("📢 Xabar yuborish", callback_data='admin_broadcast')],
-        [InlineKeyboardButton("📊 Batafsil statistika", callback_data='admin_detailed_stats')],
-        [InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]
-    ]
-    await query.edit_message_text(
-        message,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='HTML'
-    )
-
-async def back_to_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    user = query.from_user
-    bot_username = context.bot.username
-    referral_link = f"https://t.me/{bot_username}?start={user.id}"
-
-    message = (
-        f"🎉 Xush kelibsiz, <b>{user.first_name}</b>!\n\n"
-        f"🔗 Sizning referal linkingiz:\n"
-        f"<a href=\"{referral_link}\">👉 Do'stlarga yuborish uchun bosing</a>\n\n"
-        f"Do'stlaringizni taklif qiling va TOP reytingga chiqing! 🏆"
-    )
-
-    await query.edit_message_text(
-        message,
-        reply_markup=make_main_keyboard(user.id),
-        parse_mode='HTML',
-        disable_web_page_preview=True
-    )
-
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data
-    user_id = query.from_user.id # user_id ni teparoqda olib qo'yamiz
-
-    
-    if data == 'my_stats':
-        await my_stats_callback(update, context)
-    elif data == 'top_rating':
-        await top_rating_callback(update, context)
-    elif data == 'help':
-        await help_callback(update, context)
-    elif data == 'admin_panel':
-        await admin_panel_callback(update, context)
-    elif data == 'back_to_menu':
-        await back_to_menu_callback(update, context)
-    elif data == "check_sub":
-        is_joined = await check_subscription(user_id, context)
-
-        if not is_joined:
-            await query.answer("❌ Hali obuna bo‘lmagansiz!", show_alert=True)
-            return
-
-        # Foydalanuvchi bazada bo'lmasa, qo'shib qo'yamiz
-        add_user(
-            user_id,
-            query.from_user.username or "",
-            query.from_user.first_name or "User"
-        )
-
-        # Endi bemalol statusni yangilasa bo'ladi
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute(
-            "UPDATE users SET is_subscribed = 1 WHERE user_id = ?",
-            (user_id,)
-        )
-        conn.commit()
-        conn.close()
-
-        await query.answer("✅ Obuna tasdiqlandi!")
-        await back_to_menu_callback(update, context)
-
-    elif data == 'admin_broadcast':
-        await query.answer("Bu funksiya keyingi versiyada qo'shiladi", show_alert=True)
-    elif data == 'admin_detailed_stats':
-        await query.answer("Bu funksiya keyingi versiyada qo'shiladi", show_alert=True)
-
-# ─────────────────────────── MAIN ───────────────────────────
-
-def main():
-    if not TOKEN:
-        print("XATO: .env faylda BOT_TOKEN yo'q!")
+    users = await get_top_users(10)
+    if not users:
+        await msg.answer("Hozircha ma'lumot yo'q.")
         return
+    medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+    text = "🏆 <b>TOP 10 — Ko'proq odam taklif qilganlar</b>\n\n"
+    for i, u in enumerate(users):
+        uname = f"@{u['username']}" if u["username"] else ""
+        text += f"{medals[i]} <b>{u['full_name'] or 'Nomalum'}</b> {uname} — <b>{u['referral_count']}</b> kishi\n"
+    await msg.answer(text, parse_mode="HTML")
 
-    init_db()
 
-    application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_callback))
-
-def main():
-    if not TOKEN:
-        raise Exception("BOT_TOKEN yo'q!")
-
-    init_db()
-
-    application = Application.builder().token(TOKEN).build()
-    
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_callback))
-    
-    application.add_handler(ChatJoinRequestHandler(join_request))
-
-    print("✅ Bot polling rejimida ishga tushdi!")
-    def run_flask():
-        app.run(host="0.0.0.0", port=PORT)
-
-    Thread(target=run_flask).start()
-
-    application.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True
+@router.message(F.text == "❓ Yordam")
+async def help_cmd(msg: Message):
+    await msg.answer(
+        "❓ <b>Yordam</b>\n\n"
+        "🔗 <b>Referal havolam</b> — Shaxsiy havolangizni olib do'stlarga yuboring.\n\n"
+        "📊 <b>Statistikam</b> — Siz taklif qilganlar ro'yxati va soni.\n\n"
+        "🏆 <b>Top reyting</b> — Eng ko'p taklif qilganlar ro'yxati.\n\n"
+        "📞 Muammo bo'lsa admingа murojaat qiling.",
+        parse_mode="HTML"
     )
 
-if __name__ == '__main__':
-    main()
 
+# ── ADMIN ─────────────────────────────────────────────────────
+
+@router.message(F.text == "⚙️ Admin panel")
+async def admin_panel(msg: Message):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+    total = await get_total_users()
+    await msg.answer(
+        f"⚙️ <b>Admin panel</b>\n\n👥 Jami foydalanuvchilar: <b>{total}</b>",
+        parse_mode="HTML", reply_markup=admin_kb()
+    )
+
+
+@router.callback_query(F.data == "stats")
+async def admin_stats(call: CallbackQuery):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    total = await get_total_users()
+    top = await get_top_users(5)
+    text = f"📈 <b>Statistika</b>\n\n👥 Jami: <b>{total}</b>\n\n🏆 Top 5:\n"
+    for i, u in enumerate(top, 1):
+        text += f"  {i}. {u['full_name'] or 'Nomalum'} — {u['referral_count']} kishi\n"
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=admin_kb())
+
+
+@router.callback_query(F.data == "broadcast")
+async def broadcast_start(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    await state.set_state(St.broadcast)
+    await call.message.edit_text(
+        "📨 Barcha foydalanuvchilarga yuboriladigan xabarni yozing\n(matn, rasm, video — istalgan):",
+        reply_markup=cancel_kb()
+    )
+
+
+@router.message(St.broadcast)
+async def do_broadcast(msg: Message, bot: Bot, state: FSMContext):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+    await state.clear()
+    ids = await get_all_user_ids()
+    ok = fail = 0
+    status = await msg.answer(f"📤 Yuborilmoqda... 0/{len(ids)}")
+    for i, uid in enumerate(ids):
+        try:
+            await msg.copy_to(uid)
+            ok += 1
+        except Exception:
+            fail += 1
+        if (i + 1) % 20 == 0:
+            try:
+                await status.edit_text(f"📤 Yuborilmoqda... {i+1}/{len(ids)}")
+            except Exception:
+                pass
+        await asyncio.sleep(0.05)
+    await status.edit_text(
+        f"✅ <b>Yuborish yakunlandi!</b>\n\n✔️ Muvaffaqiyatli: <b>{ok}</b>\n❌ Xatolik: <b>{fail}</b>",
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data == "search")
+async def search_start(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    await state.set_state(St.search)
+    await call.message.edit_text(
+        "🔍 Foydalanuvchi <b>username</b> yoki <b>ID</b> sini kiriting:",
+        parse_mode="HTML", reply_markup=cancel_kb()
+    )
+
+
+@router.message(St.search)
+async def do_search(msg: Message, state: FSMContext):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+    await state.clear()
+    results = await search_user(msg.text)
+    if not results:
+        await msg.answer("❌ Foydalanuvchi topilmadi.")
+        return
+    for u in results[:5]:
+        full_name = u['full_name'] or "Noma'lum"
+        username = u['username'] or "-"
+        referred_by = u['referred_by'] or "mustaqil"
+        joined_at = str(u['joined_at'])[:10]
+
+        text = (
+            f"👤 <b>{full_name}</b>\n"
+            f"🆔 ID: <code>{u['user_id']}</code>\n"
+            f"📛 Username: @{username}\n"
+            f"👥 Taklif qilgani: <b>{u['referral_count']}</b> kishi\n"
+            f"🔗 Kim orqali: <code>{referred_by}</code>\n"
+            f"📅 Qo'shilgan: {joined_at}"
+        )
+        
+        await msg.answer(text, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "cancel")
+async def cancel(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    total = await get_total_users()
+    await call.message.edit_text(
+        f"⚙️ <b>Admin panel</b>\n\n👥 Jami: <b>{total}</b>",
+        parse_mode="HTML", reply_markup=admin_kb()
+    )
+
+
+# ─────────────────────────────────────────────
+#  ISHGA TUSHIRISH
+# ─────────────────────────────────────────────
+
+async def main():
+    bot = Bot(token=BOT_TOKEN)
+    dp  = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
+    await init_db()
+    log.info("Bot ishga tushdi ✅")
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
